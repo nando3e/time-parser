@@ -1,6 +1,6 @@
 version: "3.9"
 services:
-  rbp-time-parser:
+  time-parser:
     build: .
     container_name: time-parser
     restart: unless-stopped
