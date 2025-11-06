@@ -39,7 +39,91 @@ function preprocesarExpresion(expresion, fechaReferencia) {
     return refDate.plus({ days: 2 });
   }
   
+  // Detectar "que viene" / "que ve" (próximo día de la semana)
+  // Ejemplo: "el martes que viene", "dimarts que ve"
+  const matchQueViene = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+que\s+(viene|ve)/i);
+  if (matchQueViene) {
+    const diasSemana = {
+      'lunes': 1, 'martes': 2, 'miércoles': 3, 'miercoles': 3, 'jueves': 4, 'viernes': 5, 'sábado': 6, 'sabado': 6, 'domingo': 7,
+      'dilluns': 1, 'dimarts': 2, 'dimecres': 3, 'dijous': 4, 'divendres': 5, 'dissabte': 6, 'diumenge': 7
+    };
+    
+    const diaObjetivo = diasSemana[matchQueViene[1].toLowerCase()];
+    const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
+    
+    if (diaObjetivo) {
+      // Calcular días hasta el próximo día de la semana
+      let diasSumar = diaObjetivo - hoyDiaSemana;
+      if (diasSumar <= 0) {
+        diasSumar += 7; // Próxima semana
+      }
+      
+      // Saltar fines de semana si hoy es viernes
+      if (hoyDiaSemana === 5 && diasSumar <= 2) {
+        diasSumar = 3; // Saltar a lunes
+      }
+      
+      return refDate.plus({ days: diasSumar }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
+    }
+  }
+  
   return null; // Dejar que Chrono lo maneje
+}
+
+/**
+ * Valida y corrige una fecha parseada según las reglas de negocio
+ * - Nunca usar fechas pasadas
+ * - Saltar fines de semana si es necesario
+ * - Aplicar reglas de hora por defecto
+ */
+function validarYCorregirFecha(fecha, fechaReferencia, expresion) {
+  const refDate = DateTime.fromJSDate(fechaReferencia);
+  const normalizada = expresion.toLowerCase();
+  
+  // Si la fecha es pasada, buscar la próxima ocurrencia
+  if (fecha < refDate) {
+    // Si es un día de la semana, buscar el próximo
+    const diaSemana = fecha.weekday; // 1=lunes, 7=domingo
+    const hoyDiaSemana = refDate.weekday;
+    
+    // Calcular días hasta el próximo día de la semana
+    let diasSumar = diaSemana - hoyDiaSemana;
+    if (diasSumar <= 0) {
+      diasSumar += 7; // Próxima semana
+    }
+    
+    // Saltar fines de semana si hoy es viernes y el objetivo es antes del lunes
+    if (hoyDiaSemana === 5 && diasSumar <= 2) { // Viernes
+      diasSumar = 3; // Saltar a lunes
+    }
+    
+    fecha = refDate.plus({ days: diasSumar }).set({
+      hour: fecha.hour,
+      minute: fecha.minute,
+      second: 0,
+      millisecond: 0
+    });
+  }
+  
+  // Reglas de hora por defecto
+  // Si no tiene hora específica, asumir tarde (14:00)
+  if (fecha.hour === 0 && fecha.minute === 0 && !normalizada.match(/\d+\s*(h|horas?|hrs?|m|minutos?)/i)) {
+    fecha = fecha.set({ hour: 14, minute: 0 });
+  }
+  
+  // Si dice "a las 7" sin especificar AM/PM, asumir 19:00
+  const matchHora7 = normalizada.match(/a\s+(las?|les?)\s+7\b/i);
+  if (matchHora7 && fecha.hour === 7) {
+    fecha = fecha.set({ hour: 19 });
+  }
+  
+  // Solo viernes: horario de mañana válido (10:00-13:00)
+  // Si es otro día y está en horario de mañana, mover a tarde
+  if (fecha.weekday !== 5 && fecha.hour >= 10 && fecha.hour < 14) {
+    fecha = fecha.set({ hour: 14 });
+  }
+  
+  return fecha;
 }
 
 /**
@@ -108,13 +192,20 @@ async function parsearConOpenAI(expresion, fechaReferencia, zonaHoraria) {
     const fechaRefISO = refDate.toISO();
     
     const prompt = `Eres un experto en interpretar expresiones temporales en español y catalán.
-    
-Fecha de referencia: ${fechaRefISO}
+
+Fecha de referencia (HOY): ${fechaRefISO}
 Zona horaria: ${zonaHoraria}
 Expresión del usuario: "${expresion}"
 
+REGLAS OBLIGATORIAS:
+1. NUNCA uses una fecha pasada. Si la expresión se refiere a un día que ya pasó, busca el PRÓXIMO ocurrencia.
+2. Saltar fines de semana: Si hoy es viernes y la expresión se refiere a mañana o pasado mañana, significa LUNES.
+3. Hora por defecto: Si no se especifica "mañana" o "tarde", asume TARDE (14:00).
+4. "A las 7" sin AM/PM = 19:00 (7 PM).
+5. Solo los VIERNES es válido el horario de mañana (10:00-13:00). Otros días, si está en ese rango, muévelo a 14:00.
+6. Para expresiones como "el martes que viene", "dimarts que ve", etc., SIEMPRE busca el PRÓXIMO martes desde hoy, nunca el pasado.
+
 Tu tarea: Interpreta la expresión y devuelve SOLO la fecha y hora en formato ISO 8601 (ejemplo: 2025-01-15T14:30:00+01:00).
-Si la expresión no tiene hora específica, usa las 12:00:00.
 Responde SOLO con la fecha ISO, sin explicaciones, sin texto adicional.
 
 Fecha ISO:`;
@@ -257,6 +348,17 @@ app.post("/parse-fecha", async (req, res) => {
         }
       } else {
         fecha = DateTime.fromJSDate(parsed, { zone: zona_horaria });
+        
+        // Validar y corregir la fecha según reglas de negocio
+        fecha = validarYCorregirFecha(fecha, refDateJS, expresion_usuario);
+        
+        // DOBLE CHECK: Si después de validar sigue siendo pasada y tenemos OpenAI, intentar con LLM
+        if (fecha < refDate && openai) {
+          const fechaOpenAI = await parsearConOpenAI(expresion_usuario, refDateJS, zona_horaria);
+          if (fechaOpenAI && fechaOpenAI >= refDate) {
+            fecha = fechaOpenAI;
+          }
+        }
       }
     }
 
