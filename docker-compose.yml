@@ -7,6 +7,8 @@ services:
     environment:
       - TZ=Europe/Madrid
       - NODE_ENV=production
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
     # Sin puertos expuestos - Dockploy/Traefik accede por la red interna
     # Sin labels de Traefik - Dockploy los añade automáticamente
     networks:

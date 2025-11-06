@@ -10,7 +10,8 @@
     "dependencies": {
       "chrono-node": "^2.7.6",
       "express": "^4.19.2",
-      "luxon": "^3.5.0"
+      "luxon": "^3.5.0",
+      "openai": "^4.20.0"
     }
   }
   
