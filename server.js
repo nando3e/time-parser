@@ -39,6 +39,36 @@ function preprocesarExpresion(expresion, fechaReferencia) {
     return refDate.plus({ days: 2 });
   }
   
+  // Detectar "de la semana que viene/próxima/vinent/propera" (forzar próxima semana)
+  // Ejemplo: "el viernes de la semana que viene", "divendres de la setmana vinent", "viernes próxima semana"
+  const matchSemanaQueViene1 = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+(?:de\s+la\s+)?(?:semana|setmana)\s+(?:que\s+(?:viene|ve)|próxima|proxima|pròxima|vinent|propera|siguiente|següent)/i);
+  const matchSemanaQueViene2 = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+(?:próxima|proxima|pròxima|vinent|propera|siguiente|següent)\s+(?:semana|setmana)/i);
+  const matchSemanaQueViene = matchSemanaQueViene1 || matchSemanaQueViene2;
+  
+  if (matchSemanaQueViene) {
+    const diasSemana = {
+      'lunes': 1, 'martes': 2, 'miércoles': 3, 'miercoles': 3, 'jueves': 4, 'viernes': 5, 'sábado': 6, 'sabado': 6, 'domingo': 7,
+      'dilluns': 1, 'dimarts': 2, 'dimecres': 3, 'dijous': 4, 'divendres': 5, 'dissabte': 6, 'diumenge': 7
+    };
+    
+    const diaObjetivo = diasSemana[matchSemanaQueViene[1].toLowerCase()];
+    const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
+    
+    if (diaObjetivo) {
+      // Calcular días hasta ese día en ESTA semana
+      let diasHastaEstaSemana = diaObjetivo - hoyDiaSemana;
+      if (diasHastaEstaSemana < 0) {
+        diasHastaEstaSemana += 7; // Ya pasó esta semana
+      }
+      
+      // Como dice "de la semana que viene", SIEMPRE sumar 7 días más
+      // Esto asegura que sea de la próxima semana, no de esta
+      const diasSumar = diasHastaEstaSemana + 7;
+      
+      return refDate.plus({ days: diasSumar }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
+    }
+  }
+  
   // Detectar "que viene" / "que ve" (próximo día de la semana)
   // Ejemplo: "el martes que viene", "dimarts que ve"
   const matchQueViene = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+que\s+(viene|ve)/i);
@@ -262,7 +292,11 @@ REGLAS OBLIGATORIAS:
 3. Hora por defecto: Si no se especifica hora, asume MEDIODÍA (12:00) - más genérico.
 4. "A las 7" sin AM/PM = 19:00 (7 PM) por defecto.
 5. Para expresiones como "el martes que viene", "dimarts que ve", etc., SIEMPRE busca el PRÓXIMO martes desde hoy, nunca el pasado.
-6. Si la expresión NO contiene información temporal clara (solo saludos, etc.), responde con "sin_definir".
+6. **PRÓXIMA SEMANA es CRÍTICO**: Si la expresión menciona "próxima semana", "semana que viene", "setmana vinent", "setmana propera", "siguiente semana", etc., el día mencionado DEBE ser de la PRÓXIMA semana (mínimo +7 días desde hoy), NO de esta semana. Ejemplos:
+   - "viernes de la próxima semana" = viernes de la semana siguiente (mínimo +7 días)
+   - "divendres de la setmana vinent" = viernes de la semana siguiente (mínimo +7 días)
+   - "martes próxima semana" = martes de la semana siguiente (mínimo +7 días)
+7. Si la expresión NO contiene información temporal clara (solo saludos, etc.), responde con "sin_definir".
 
 Tu tarea: Interpreta la expresión y devuelve SOLO la fecha y hora en formato ISO 8601 (ejemplo: 2025-01-15T14:30:00+01:00).
 Si no hay información temporal clara, responde SOLO con "sin_definir".
