@@ -1,5 +1,5 @@
 {
-    "name": "rbp-time-parser",
+    "name": "time-parser",
     "version": "1.0.0",
     "description": "Microservicio determinista para interpretación temporal (fechas y horas naturales).",
     "main": "server.js",
