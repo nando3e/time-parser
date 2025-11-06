@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  rbp-time-parser:
+    build: .
+    container_name: rbp-time-parser
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Madrid
+      - NODE_ENV=production
+    # Sin puertos expuestos - Dockploy/Traefik accede por la red interna
+    # Sin labels de Traefik - Dockploy los añade automáticamente
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true

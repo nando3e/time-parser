@@ -1,0 +1,16 @@
+{
+    "name": "rbp-time-parser",
+    "version": "1.0.0",
+    "description": "Microservicio determinista para interpretación temporal (fechas y horas naturales).",
+    "main": "server.js",
+    "type": "module",
+    "scripts": {
+      "start": "node server.js"
+    },
+    "dependencies": {
+      "chrono-node": "^2.7.6",
+      "express": "^4.19.2",
+      "luxon": "^3.5.0"
+    }
+  }
+  
