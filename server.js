@@ -55,15 +55,15 @@ function preprocesarExpresion(expresion, fechaReferencia) {
     const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
     
     if (diaObjetivo) {
-      // Calcular días hasta ese día en ESTA semana
-      let diasHastaEstaSemana = diaObjetivo - hoyDiaSemana;
-      if (diasHastaEstaSemana < 0) {
-        diasHastaEstaSemana += 7; // Ya pasó esta semana
-      }
+      // Calcular días hasta ese día de la PRÓXIMA semana
+      // Primero, calcular cuántos días hasta el lunes de la próxima semana
+      const diasHastaLunesProxima = (8 - hoyDiaSemana) % 7 || 7; // Días hasta el próximo lunes
       
-      // Como dice "de la semana que viene", SIEMPRE sumar 7 días más
-      // Esto asegura que sea de la próxima semana, no de esta
-      const diasSumar = diasHastaEstaSemana + 7;
+      // Luego, sumar los días desde el lunes hasta el día objetivo
+      const diasDesdeLunes = (diaObjetivo - 1) % 7; // 0=lunes, 6=domingo
+      
+      // Total: días hasta lunes próxima semana + días desde lunes hasta día objetivo
+      const diasSumar = diasHastaLunesProxima + diasDesdeLunes;
       
       return refDate.plus({ days: diasSumar }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
     }
