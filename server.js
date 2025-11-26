@@ -55,15 +55,22 @@ function preprocesarExpresion(expresion, fechaReferencia) {
     const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
     
     if (diaObjetivo) {
-      // Calcular días hasta ese día de la PRÓXIMA semana
-      // Primero, calcular cuántos días hasta el lunes de la próxima semana
-      const diasHastaLunesProxima = (8 - hoyDiaSemana) % 7 || 7; // Días hasta el próximo lunes
+      // "La semana que viene" = la semana que empieza el próximo lunes
+      // Calcular días hasta el próximo lunes (no siempre +7, depende del día actual)
+      let diasHastaProximoLunes;
+      if (hoyDiaSemana === 1) {
+        // Si hoy es lunes, el próximo lunes es dentro de 7 días
+        diasHastaProximoLunes = 7;
+      } else {
+        // Si no es lunes, calcular días hasta el próximo lunes
+        diasHastaProximoLunes = 8 - hoyDiaSemana; // Ej: viernes (5) → 8-5 = 3 días
+      }
       
-      // Luego, sumar los días desde el lunes hasta el día objetivo
-      const diasDesdeLunes = (diaObjetivo - 1) % 7; // 0=lunes, 6=domingo
+      // Luego, sumar los días desde ese lunes hasta el día objetivo
+      const diasDesdeLunes = diaObjetivo - 1; // 0=lunes, 6=domingo
       
-      // Total: días hasta lunes próxima semana + días desde lunes hasta día objetivo
-      const diasSumar = diasHastaLunesProxima + diasDesdeLunes;
+      // Total: días hasta próximo lunes + días desde lunes hasta día objetivo
+      const diasSumar = diasHastaProximoLunes + diasDesdeLunes;
       
       return refDate.plus({ days: diasSumar }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
     }
@@ -128,8 +135,17 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion) {
       
       // Calcular días hasta el próximo día de la semana
       let diasSumar = diaSemana - hoyDiaSemana;
+      
       if (diasSumar <= 0) {
-        diasSumar += 7; // Próxima semana
+        // Si el día ya pasó esta semana, ir al lunes de la semana siguiente (no el próximo lunes)
+        // Ejemplo: hoy miércoles (3), objetivo lunes (1)
+        // Días hasta el domingo de esta semana: 7 - 3 = 4
+        // Días hasta el lunes siguiente: 4 + 1 = 5 → pero ese lunes ya pasó
+        // Debe ser el lunes de la semana siguiente: 5 + 7 = 12 días
+        const diasHastaDomingo = 7 - hoyDiaSemana; // Días hasta el domingo de esta semana
+        const diasHastaLunesSiguienteSemana = diasHastaDomingo + 1 + 7; // Lunes de la semana siguiente
+        const diasDesdeLunes = diaSemana - 1; // Días desde lunes hasta el día objetivo
+        diasSumar = diasHastaLunesSiguienteSemana + diasDesdeLunes;
       }
       
       fecha = refDate.plus({ days: diasSumar }).set({
