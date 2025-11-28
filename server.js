@@ -144,7 +144,7 @@ function preprocesarExpresion(expresion, fechaReferencia, limiteSemanas = 1) {
  * - NO saltar fines de semana en conteo de días (ej: "en 2 días" incluye sábado/domingo)
  * - Aplicar reglas de hora por defecto básicas
  */
-function validarYCorregirFecha(fecha, fechaReferencia, expresion, limiteSemanas = 1) {
+function validarYCorregirFecha(fecha, fechaReferencia, expresion, limiteSemanas = 1, diasExcluidos = []) {
   const refDate = DateTime.fromJSDate(fechaReferencia);
   const normalizada = expresion.toLowerCase();
   
@@ -152,6 +152,20 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion, limiteSemanas 
   const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
   const diasHastaDomingo = 7 - hoyDiaSemana;
   const limiteDias = diasHastaDomingo + (limiteSemanas * 7);
+  
+  // --- LÓGICA PARA "HOY PERO YA PASÓ LA HORA" ---
+  // Si la fecha es hoy, pero la hora ya pasó, y NO especificó una fecha concreta (solo hora o "hoy")
+  const esMismoDia = fecha.hasSame(refDate, 'day');
+  if (esMismoDia && fecha < refDate) {
+      // Verificar si especificó una fecha concreta ("hoy 28 de noviembre", "viernes 28")
+      const tieneFechaEspecifica = normalizada.match(/\d+\s+(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|gener|febrer|març|abril|maig|juny|juliol|agost|setembre|octubre|novembre|desembre)/i) ||
+                                   normalizada.match(/(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|gener|febrer|març|abril|maig|juny|juliol|agost|setembre|octubre|novembre|desembre)\s+\d+/i);
+      
+      if (!tieneFechaEspecifica) {
+          // Asumir que quería "a partir de ahora" o la próxima ocurrencia -> Mover a MAÑANA
+          fecha = fecha.plus({ days: 1 });
+      }
+  }
   
   // Detectar si es un conteo de días (ej: "en 2 días", "dentro de 3 días", "pasado mañana")
   const esConteoDias = normalizada.match(/(?:en|dentro de|dins de)\s+(\d+)\s+d[ií]as?/i) ||
@@ -268,6 +282,39 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion, limiteSemanas 
   const matchHora7 = normalizada.match(/a\s+(las?|les?)\s+7\b/i);
   if (matchHora7 && fecha.hour === 7 && !normalizada.match(/7\s*(am|a\.m\.|de la mañana)/i)) {
     fecha = fecha.set({ hour: 19 });
+  }
+  
+  // --- LÓGICA DE DÍAS EXCLUIDOS ---
+  // Si la fecha cae en un día excluido, saltar al siguiente día válido
+  if (diasExcluidos && diasExcluidos.length > 0) {
+      let intentos = 0;
+      // Mapa de días a números ISO (1=Lunes, 7=Domingo)
+      const mapaDias = {
+          'lunes': 1, 'martes': 2, 'miercoles': 3, 'miércoles': 3, 'jueves': 4, 'viernes': 5, 'sabado': 6, 'sábado': 6, 'domingo': 7,
+          'dilluns': 1, 'dimarts': 2, 'dimecres': 3, 'dijous': 4, 'divendres': 5, 'dissabte': 6, 'diumenge': 7,
+          'lun': 1, 'mar': 2, 'mie': 3, 'mié': 3, 'jue': 4, 'vie': 5, 'sab': 6, 'sáb': 6, 'dom': 7,
+          'dl': 1, 'dt': 2, 'dc': 3, 'dj': 4, 'dv': 5, 'ds': 6, 'dg': 7,
+          '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7
+      };
+
+      // Normalizar días excluidos a números
+      const excluidosNumeros = diasExcluidos.map(d => {
+          const dNorm = d.toString().toLowerCase().trim();
+          return mapaDias[dNorm] || parseInt(dNorm, 10);
+      }).filter(n => !isNaN(n));
+
+      // Bucle para saltar días excluidos (máximo 14 días para evitar bucles infinitos)
+      while (intentos < 14) {
+          const diaSemanaActual = fecha.weekday;
+          if (excluidosNumeros.includes(diaSemanaActual)) {
+              // Si es excluido, sumar 1 día
+              fecha = fecha.plus({ days: 1 });
+              intentos++;
+          } else {
+              // Día válido encontrado
+              break;
+          }
+      }
   }
   
   return fecha;
@@ -474,7 +521,7 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/parse-fecha", async (req, res) => {
-  const { referencia, expresion_usuario, zona_horaria = "Europe/Madrid", limite_semanas = 1 } = req.body;
+  const { referencia, expresion_usuario, zona_horaria = "Europe/Madrid", limite_semanas = 1, dias_excluidos = [] } = req.body;
 
   try {
     if (!referencia || !expresion_usuario) {
@@ -502,8 +549,16 @@ app.post("/parse-fecha", async (req, res) => {
       return res.status(400).json({ error: true, mensaje: "Referencia inválida." });
     }
 
-    // Convertir limite_semanas a número (por si viene como string)
+    // Convertir limite_semanas a número
     const limiteSemanas = parseInt(limite_semanas, 10) || 1;
+    
+    // Procesar dias_excluidos (puede venir como string separado por comas o array)
+    let diasExcluidos = [];
+    if (typeof dias_excluidos === 'string') {
+      diasExcluidos = dias_excluidos.split(',').map(d => d.trim());
+    } else if (Array.isArray(dias_excluidos)) {
+      diasExcluidos = dias_excluidos;
+    }
     
     // Preprocesar expresiones especiales (pasado mañana, demà passat, etc.)
     const preprocesado = preprocesarExpresion(expresion_usuario, refDate.toJSDate(), limiteSemanas);
@@ -586,7 +641,7 @@ app.post("/parse-fecha", async (req, res) => {
         fecha = DateTime.fromJSDate(parsed, { zone: zona_horaria });
         
         // Validar y corregir la fecha según reglas de negocio
-        fecha = validarYCorregirFecha(fecha, refDateJS, expresion_usuario, limiteSemanas);
+        fecha = validarYCorregirFecha(fecha, refDateJS, expresion_usuario, limiteSemanas, diasExcluidos);
         
         // DOBLE CHECK: Si después de validar sigue siendo pasada y tenemos OpenAI, intentar con LLM
         if (fecha < refDate && openai) {
