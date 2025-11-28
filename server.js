@@ -16,9 +16,14 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
  * Preprocesa expresiones problemáticas antes de pasar a Chrono
  * Maneja casos como "pasado mañana" que Chrono no entiende bien
  */
-function preprocesarExpresion(expresion, fechaReferencia) {
+function preprocesarExpresion(expresion, fechaReferencia, limiteSemanas = 1) {
   const normalizada = expresion.toLowerCase().trim();
   const refDate = DateTime.fromJSDate(fechaReferencia);
+  
+  // Calcular límite de días dinámico: días hasta domingo + (semanas * 7)
+  const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
+  const diasHastaDomingo = 7 - hoyDiaSemana;
+  const limiteDias = diasHastaDomingo + (limiteSemanas * 7);
   
   // Expresiones con hora (español)
   const matchPasadoMananaHora = expresion.match(/pasado\s+mañana\s+a\s+las\s+(\d+)/i);
@@ -70,15 +75,35 @@ function preprocesarExpresion(expresion, fechaReferencia) {
       const diasDesdeLunes = diaObjetivo - 1; // 0=lunes, 6=domingo
       
       // Total: días hasta próximo lunes + días desde lunes hasta día objetivo
-      const diasSumar = diasHastaProximoLunes + diasDesdeLunes;
+      let diasSumar = diasHastaProximoLunes + diasDesdeLunes;
+      
+      // Aplicar límite de días: si excede, buscar el mismo día de la semana más cercano dentro del límite
+      if (diasSumar > limiteDias) {
+        // Buscar el mismo día de la semana dentro del límite
+        const diasHastaDiaEstaSemana = diaObjetivo - hoyDiaSemana;
+        if (diasHastaDiaEstaSemana > 0 && diasHastaDiaEstaSemana <= limiteDias) {
+          // El día está en esta semana dentro del límite
+          diasSumar = diasHastaDiaEstaSemana;
+        } else {
+          // El día ya pasó esta semana o excede, buscar el más cercano dentro del límite
+          if (diasHastaDiaEstaSemana <= 0) {
+            // Ya pasó, buscar en la próxima semana pero limitado
+            diasSumar = Math.min(limiteDias, diasHastaDiaEstaSemana + 7);
+          } else {
+            // Está en esta semana pero excede (no debería pasar)
+            diasSumar = Math.min(diasHastaDiaEstaSemana, limiteDias);
+          }
+        }
+      }
       
       return refDate.plus({ days: diasSumar }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
     }
   }
   
-  // Detectar "que viene" / "que ve" (próximo día de la semana)
-  // Ejemplo: "el martes que viene", "dimarts que ve"
-  const matchQueViene = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+que\s+(viene|ve)/i);
+  // Detectar "que viene" / "que ve" / "próximo" (próximo día de la semana)
+  // Ejemplo: "el martes que viene", "dimarts que ve", "el próximo martes"
+  const matchQueViene = normalizada.match(/(?:el\s+)?(?:próximo|proximo|pròxim|següent|siguiente)\s+(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)/i) ||
+                        normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+que\s+(viene|ve)/i);
   if (matchQueViene) {
     const diasSemana = {
       'lunes': 1, 'martes': 2, 'miércoles': 3, 'miercoles': 3, 'jueves': 4, 'viernes': 5, 'sábado': 6, 'sabado': 6, 'domingo': 7,
@@ -100,6 +125,12 @@ function preprocesarExpresion(expresion, fechaReferencia) {
         diasSumar = 3; // Saltar a lunes
       }
       
+      // Aplicar límite de días
+      if (diasSumar > limiteDias) {
+        // Buscar el mismo día de la semana más cercano dentro del límite
+        diasSumar = Math.min(diasSumar, limiteDias);
+      }
+      
       return refDate.plus({ days: diasSumar }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
     }
   }
@@ -113,9 +144,14 @@ function preprocesarExpresion(expresion, fechaReferencia) {
  * - NO saltar fines de semana en conteo de días (ej: "en 2 días" incluye sábado/domingo)
  * - Aplicar reglas de hora por defecto básicas
  */
-function validarYCorregirFecha(fecha, fechaReferencia, expresion) {
+function validarYCorregirFecha(fecha, fechaReferencia, expresion, limiteSemanas = 1) {
   const refDate = DateTime.fromJSDate(fechaReferencia);
   const normalizada = expresion.toLowerCase();
+  
+  // Calcular límite de días dinámico: días hasta domingo + (semanas * 7)
+  const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
+  const diasHastaDomingo = 7 - hoyDiaSemana;
+  const limiteDias = diasHastaDomingo + (limiteSemanas * 7);
   
   // Detectar si es un conteo de días (ej: "en 2 días", "dentro de 3 días", "pasado mañana")
   const esConteoDias = normalizada.match(/(?:en|dentro de|dins de)\s+(\d+)\s+d[ií]as?/i) ||
@@ -125,9 +161,17 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion) {
   
   // Si la fecha es pasada
   if (fecha < refDate) {
-    // Si es un día de la semana específico (ej: "el martes"), buscar el próximo
-    const esDiaSemanaEspecifico = normalizada.match(/(?:el|la|els|les)\s+(lunes|martes|miércoles|jueves|viernes|sábado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)/i);
+    // Detectar si menciona una fecha específica (día + mes), ej: "28 de noviembre", "noviembre 28"
+    const tieneFechaEspecifica = normalizada.match(/\d+\s+(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|gener|febrer|març|abril|maig|juny|juliol|agost|setembre|octubre|novembre|desembre)/i) ||
+                                   normalizada.match(/(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|gener|febrer|març|abril|maig|juny|juliol|agost|setembre|octubre|novembre|desembre)\s+\d+/i);
     
+    // Detectar si menciona un día de la semana (con o sin artículo)
+    // Ej: "viernes", "el viernes", "viernes 28 de noviembre"
+    const esDiaSemanaEspecifico = normalizada.match(/(?:el|la|els|les)?\s*(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)/i);
+    
+    // Si menciona día de la semana Y la fecha ya pasó:
+    // - Si tiene fecha específica → buscar el próximo día de la semana (no el próximo año)
+    // - Si no tiene fecha específica → buscar el próximo día de la semana
     if (esDiaSemanaEspecifico && !esConteoDias) {
       // Para días de la semana específicos, buscar el próximo
       const diaSemana = fecha.weekday; // 1=lunes, 7=domingo
@@ -137,15 +181,47 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion) {
       let diasSumar = diaSemana - hoyDiaSemana;
       
       if (diasSumar <= 0) {
-        // Si el día ya pasó esta semana, ir al lunes de la semana siguiente (no el próximo lunes)
+        // Si el día ya pasó esta semana, ir al lunes de la próxima semana
         // Ejemplo: hoy miércoles (3), objetivo lunes (1)
         // Días hasta el domingo de esta semana: 7 - 3 = 4
-        // Días hasta el lunes siguiente: 4 + 1 = 5 → pero ese lunes ya pasó
-        // Debe ser el lunes de la semana siguiente: 5 + 7 = 12 días
+        // Días hasta el próximo lunes (que ya es de la próxima semana): 4 + 1 = 5 días
         const diasHastaDomingo = 7 - hoyDiaSemana; // Días hasta el domingo de esta semana
-        const diasHastaLunesSiguienteSemana = diasHastaDomingo + 1 + 7; // Lunes de la semana siguiente
+        const diasHastaProximoLunes = diasHastaDomingo + 1; // Lunes de la próxima semana
         const diasDesdeLunes = diaSemana - 1; // Días desde lunes hasta el día objetivo
-        diasSumar = diasHastaLunesSiguienteSemana + diasDesdeLunes;
+        diasSumar = diasHastaProximoLunes + diasDesdeLunes;
+      }
+      
+      // Aplicar límite de días: si excede, buscar el mismo día de la semana más cercano dentro del límite
+      if (diasSumar > limiteDias) {
+        // Buscar el mismo día de la semana dentro del límite
+        // Ejemplo: si hoy es lunes y piden "domingo de la semana que viene" (13 días)
+        // pero el límite es 11, buscar el domingo más cercano dentro de 11 días
+        const diasHastaProximoDia = diaSemana - hoyDiaSemana;
+        if (diasHastaProximoDia > 0 && diasHastaProximoDia <= limiteDias) {
+          // El día está en esta semana dentro del límite
+          diasSumar = diasHastaProximoDia;
+        } else {
+          // Buscar el día más cercano: si está en esta semana pero ya pasó, buscar en la próxima
+          // pero limitado a limiteDias días
+          if (diasHastaProximoDia <= 0) {
+            // Ya pasó esta semana, buscar en la próxima pero limitado
+            const diasHastaDomingo = 7 - hoyDiaSemana;
+            const diasHastaProximoLunes = diasHastaDomingo + 1;
+            const diasDesdeLunes = diaSemana - 1;
+            const diasCalculados = diasHastaProximoLunes + diasDesdeLunes;
+            
+            if (diasCalculados > limiteDias) {
+              // Si aún excede, buscar el mismo día de esta semana (aunque ya pasó, es el más cercano dentro del límite)
+              // O mejor: buscar el día más cercano dentro del límite
+              diasSumar = Math.min(limiteDias, diasHastaProximoDia + 7);
+            } else {
+              diasSumar = diasCalculados;
+            }
+          } else {
+            // Está en esta semana pero excede el límite (no debería pasar, pero por seguridad)
+            diasSumar = Math.min(diasHastaProximoDia, limiteDias);
+          }
+        }
       }
       
       fecha = refDate.plus({ days: diasSumar }).set({
@@ -156,6 +232,30 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion) {
       });
     }
     // Si es conteo de días, NO corregir (dejar que incluya fines de semana)
+  }
+  
+  // Validación final: si la fecha resultante excede el límite, ajustarla restando semanas
+  // Esto mantiene el día de la semana correcto pero corrige saltos excesivos (ej: irse a 2026 o saltar una semana extra)
+  let diasDiferencia = fecha.diff(refDate, 'days').days; // Puede tener decimales
+  
+  if (diasDiferencia > limiteDias) {
+    // Restar semanas hasta entrar en el límite
+    // Usamos un bucle de seguridad, pero matemáticamente podemos calcularlo directo
+    const semanasExcedidas = Math.ceil((diasDiferencia - limiteDias) / 7);
+    fecha = fecha.minus({ days: semanasExcedidas * 7 });
+    
+    // Recalcular diferencia para asegurar
+    diasDiferencia = fecha.diff(refDate, 'days').days;
+    
+    // Si al restar nos fuimos al pasado (diferencia negativa), sumar 7 para quedarnos con la próxima ocurrencia futura
+    // (A menos que sea "hoy" y la hora sea válida, pero Chrono suele manejar fechas futuras)
+    if (diasDiferencia < 0) {
+       // Verificar si es hoy (diferencia pequeña negativa por horas)
+       const esMismoDia = fecha.hasSame(refDate, 'day');
+       if (!esMismoDia && fecha < refDate) {
+          fecha = fecha.plus({ days: 7 });
+       }
+    }
   }
   
   // Reglas de hora por defecto básicas
@@ -374,7 +474,7 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/parse-fecha", async (req, res) => {
-  const { referencia, expresion_usuario, zona_horaria = "Europe/Madrid" } = req.body;
+  const { referencia, expresion_usuario, zona_horaria = "Europe/Madrid", limite_semanas = 1 } = req.body;
 
   try {
     if (!referencia || !expresion_usuario) {
@@ -402,8 +502,11 @@ app.post("/parse-fecha", async (req, res) => {
       return res.status(400).json({ error: true, mensaje: "Referencia inválida." });
     }
 
+    // Convertir limite_semanas a número (por si viene como string)
+    const limiteSemanas = parseInt(limite_semanas, 10) || 1;
+    
     // Preprocesar expresiones especiales (pasado mañana, demà passat, etc.)
-    const preprocesado = preprocesarExpresion(expresion_usuario, refDate.toJSDate());
+    const preprocesado = preprocesarExpresion(expresion_usuario, refDate.toJSDate(), limiteSemanas);
     let fecha;
     
     if (preprocesado) {
@@ -483,7 +586,7 @@ app.post("/parse-fecha", async (req, res) => {
         fecha = DateTime.fromJSDate(parsed, { zone: zona_horaria });
         
         // Validar y corregir la fecha según reglas de negocio
-        fecha = validarYCorregirFecha(fecha, refDateJS, expresion_usuario);
+        fecha = validarYCorregirFecha(fecha, refDateJS, expresion_usuario, limiteSemanas);
         
         // DOBLE CHECK: Si después de validar sigue siendo pasada y tenemos OpenAI, intentar con LLM
         if (fecha < refDate && openai) {
