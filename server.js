@@ -44,6 +44,19 @@ function preprocesarExpresion(expresion, fechaReferencia, limiteSemanas = 1) {
     return refDate.plus({ days: 2 });
   }
   
+  // Detectar "la semana que viene" (sin día específico) -> Forzar al Lunes de la semana siguiente (Lunes más inmediato de la próxima semana)
+  // Expresiones: "la semana que viene", "la próxima semana", "la setmana que ve", "la setmana vinent", "la propera setmana"
+  const matchSemanaQueVieneGen = normalizada.match(/^(?:la\s+)?(?:semana|setmana)\s+(?:que\s+(?:viene|ve)|próxima|proxima|pròxima|vinent|propera|siguiente|següent)$/i) ||
+                                 normalizada.match(/^(?:la\s+)?(?:próxima|proxima|pròxima|vinent|propera|siguiente|següent)\s+(?:semana|setmana)$/i);
+
+  if (matchSemanaQueVieneGen) {
+      // Calcular días hasta el próximo lunes (siempre el inicio de la semana siguiente)
+      // Fórmula: Días hasta el domingo actual + 1 día
+      // Ej: Viernes(5) -> Domingo(7) son 2 días + 1 = 3 días (Viernes+3 = Lunes)
+      const diasHastaProximoLunes = (7 - hoyDiaSemana) + 1;
+      return refDate.plus({ days: diasHastaProximoLunes }).set({ hour: 14, minute: 0, second: 0, millisecond: 0 });
+  }
+
   // Detectar "de la semana que viene/próxima/vinent/propera" (forzar próxima semana)
   // Ejemplo: "el viernes de la semana que viene", "divendres de la setmana vinent", "viernes próxima semana"
   const matchSemanaQueViene1 = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\s+(?:de\s+la\s+)?(?:semana|setmana)\s+(?:que\s+(?:viene|ve)|próxima|proxima|pròxima|vinent|propera|siguiente|següent)/i);
@@ -522,31 +535,44 @@ app.get("/health", (req, res) => {
 
 app.post("/parse-fecha", async (req, res) => {
   const { referencia, expresion_usuario, zona_horaria = "Europe/Madrid", limite_semanas = 1, dias_excluidos = [] } = req.body;
+  
+  const debug_info = []; // Array para traza de resolución
 
   try {
-    if (!referencia || !expresion_usuario) {
-      return res.status(400).json({
-        error: true,
-        mensaje: "Faltan parámetros requeridos: referencia y expresion_usuario."
-      });
+    // Validar inputs
+    if (!expresion_usuario) {
+      return res.status(400).json({ error: true, mensaje: "Falta el parámetro 'expresion_usuario'." });
     }
-
-    // Verificar si la expresión tiene información temporal clara
+    
+    // Si es solo un saludo o irrelevante, devolver error o null
     if (!esExpresionTemporalClara(expresion_usuario)) {
+      debug_info.push("Expresión no identificada como temporal clara.");
       return res.status(200).json({
         fecha_resuelta: "sin_definir",
         dia_semana: "sin_definir",
         hora: "sin_definir",
         iso_datetime: "sin_definir",
         es_finde: false,
-        es_pasado: false
+        es_pasado: false,
+        debug_info
       });
     }
-
-    // Fecha de referencia actual
-    const refDate = DateTime.fromISO(referencia, { zone: zona_horaria });
-    if (!refDate.isValid) {
-      return res.status(400).json({ error: true, mensaje: "Referencia inválida." });
+    
+    // Referencia temporal (ahora)
+    let refDate = DateTime.now().setZone(zona_horaria);
+    if (referencia) {
+      // Validar formato ISO básico
+      if (referencia.match(/^\d{4}-\d{2}-\d{2}/)) {
+         // Intentar parsear con ISO
+         const tempRef = DateTime.fromISO(referencia, { zone: zona_horaria });
+         if (tempRef.isValid) {
+           refDate = tempRef;
+         } else {
+           return res.status(400).json({ error: true, mensaje: "Referencia inválida." });
+         }
+      } else {
+         return res.status(400).json({ error: true, mensaje: "Referencia inválida." });
+      }
     }
 
     // Convertir limite_semanas a número
@@ -560,6 +586,9 @@ app.post("/parse-fecha", async (req, res) => {
       diasExcluidos = dias_excluidos;
     }
     
+    debug_info.push(`Referencia: ${refDate.toISO()}, Zona: ${zona_horaria}`);
+    debug_info.push(`Expresión recibida: "${expresion_usuario}"`);
+
     // Preprocesar expresiones especiales (pasado mañana, demà passat, etc.)
     const preprocesado = preprocesarExpresion(expresion_usuario, refDate.toJSDate(), limiteSemanas);
     let fecha;
@@ -567,9 +596,12 @@ app.post("/parse-fecha", async (req, res) => {
     if (preprocesado) {
       // Si el preprocesador encontró una expresión especial, usar ese resultado
       fecha = preprocesado;
+      debug_info.push("Resuelto por PREPROCESADOR (Regla estricta/especial detectada).");
     } else {
       // Detectar idioma y parsear con Chrono
       const idioma = detectarIdioma(expresion_usuario);
+      debug_info.push(`Idioma detectado: ${idioma}`);
+      
       const refDateJS = refDate.toJSDate();
       
       let parsed = null;
@@ -582,6 +614,7 @@ app.post("/parse-fecha", async (req, res) => {
         
         // Si falla, intentar con traducciones manuales básicas
         if (!parsed) {
+          debug_info.push("Chrono directo falló para CA, intentando traducción manual básica.");
           const traducciones = {
             'dilluns': 'lunes', 'dimarts': 'martes', 'dimecres': 'miércoles',
             'dijous': 'jueves', 'divendres': 'viernes', 'dissabte': 'sábado', 'diumenge': 'domingo',
@@ -598,14 +631,17 @@ app.post("/parse-fecha", async (req, res) => {
           }
           
           if (expresionTraducida !== expresion_usuario) {
+            debug_info.push(`Traducción manual aplicada: "${expresionTraducida}"`);
             parsed = chrono.es.parseDate(expresionTraducida, refDateJS);
           }
         }
         
         // Si aún falla y tenemos OpenAI, traducir con el modelo
         if (!parsed && openai) {
+          debug_info.push("Traducción manual falló, usando OpenAI para traducir.");
           const traduccion = await traducirCatalanaEspanol(expresion_usuario);
           if (traduccion) {
+            debug_info.push(`Traducción OpenAI: "${traduccion}"`);
             parsed = chrono.es.parseDate(traduccion, refDateJS);
           }
         }
@@ -616,41 +652,54 @@ app.post("/parse-fecha", async (req, res) => {
       
       if (!parsed) {
         // Si Chrono falla, intentar con OpenAI como fallback (si está configurado)
+        debug_info.push("Chrono no pudo resolver. Intentando Fallback OpenAI.");
         const fechaOpenAI = await parsearConOpenAI(expresion_usuario, refDateJS, zona_horaria);
         
         if (fechaOpenAI === 'sin_definir') {
+          debug_info.push("OpenAI devolvió 'sin_definir'.");
           return res.status(200).json({
             fecha_resuelta: "sin_definir",
             dia_semana: "sin_definir",
             hora: "sin_definir",
             iso_datetime: "sin_definir",
             es_finde: false,
-            es_pasado: false
+            es_pasado: false,
+            debug_info
           });
         }
         
         if (fechaOpenAI) {
           fecha = fechaOpenAI;
+          debug_info.push("Resuelto por OpenAI Fallback.");
         } else {
+          debug_info.push("Error: No se pudo interpretar la fecha tras todos los intentos.");
           return res.status(200).json({
             error: true,
             mensaje: "No se pudo interpretar la fecha.",
+            debug_info
           });
         }
       } else {
         fecha = DateTime.fromJSDate(parsed, { zone: zona_horaria });
+        debug_info.push("Resuelto por CHRONO.");
         
         // Validar y corregir la fecha según reglas de negocio
+        const fechaOriginal = fecha;
         fecha = validarYCorregirFecha(fecha, refDateJS, expresion_usuario, limiteSemanas, diasExcluidos);
+        if (fecha.toMillis() !== fechaOriginal.toMillis()) {
+             debug_info.push("Fecha ajustada por validaciones (días excluidos, hora pasada, etc).");
+        }
         
         // DOBLE CHECK: Si después de validar sigue siendo pasada y tenemos OpenAI, intentar con LLM
         if (fecha < refDate && openai) {
+          debug_info.push("Fecha resultante es pasada. Intentando corrección con OpenAI.");
           const fechaOpenAI = await parsearConOpenAI(expresion_usuario, refDateJS, zona_horaria);
           if (fechaOpenAI === 'sin_definir') {
             // Si OpenAI dice sin_definir, mantener la fecha parseada (aunque sea pasada)
             // El usuario puede decidir qué hacer con ella
           } else if (fechaOpenAI && fechaOpenAI >= refDate) {
             fecha = fechaOpenAI;
+            debug_info.push("Corrección OpenAI aplicada (fecha futura encontrada).");
           }
         }
       }
@@ -675,15 +724,18 @@ app.post("/parse-fecha", async (req, res) => {
       hora: fecha.toFormat("HH:mm"),
       iso_datetime: fecha.toISO(),
       es_finde,
-      es_pasado
+      es_pasado,
+      debug_info
     };
 
     res.status(200).json(response);
 
   } catch (err) {
+    debug_info.push(`Excepción capturada: ${err.message}`);
     res.status(500).json({
       error: true,
-      mensaje: err.message
+      mensaje: err.message,
+      debug_info
     });
   }
 });
