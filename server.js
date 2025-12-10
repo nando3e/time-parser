@@ -329,6 +329,81 @@ function validarYCorregirFecha(fecha, fechaReferencia, expresion, limiteSemanas 
           }
       }
   }
+
+  // --- CORRECCIÓN CRÍTICA: Validación estricta Día Semana vs Día Mes ---
+  // Si el usuario especifica "Jueves 18", verificamos que el 18 sea realmente Jueves.
+  // Si no coincide -> Error "dia y fecha no corresponde".
+  // Si coincide pero Chrono devolvió otra fecha -> Forzamos la fecha correcta.
+  
+  const matchNumeroDiaStrict = normalizada.match(/\b([1-3]?[0-9])\b/);
+  const matchDiaSemanaStrict = normalizada.match(/(?:el\s+)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)/i);
+
+  if (matchNumeroDiaStrict && matchDiaSemanaStrict) {
+      const diaSolicitado = parseInt(matchNumeroDiaStrict[1], 10);
+      // Evitar falsos positivos con horas (ej: "a las 18")
+      const esHora = normalizada.match(new RegExp(`a\\s+(las?|les?)\\s+${diaSolicitado}`, 'i'));
+      
+      if (diaSolicitado >= 1 && diaSolicitado <= 31 && !esHora) {
+          // Normalizar nombre día a número (1-7)
+          const mapaDiasStrict = {
+              'lunes': 1, 'martes': 2, 'miercoles': 3, 'miércoles': 3, 'jueves': 4, 'viernes': 5, 'sabado': 6, 'sábado': 6, 'domingo': 7,
+              'dilluns': 1, 'dimarts': 2, 'dimecres': 3, 'dijous': 4, 'divendres': 5, 'dissabte': 6, 'diumenge': 7
+          };
+          // Buscar el nombre exacto usado (normalizado a minúsculas ya está en matchDiaSemanaStrict[1])
+          const diaSemanaSolicitado = matchDiaSemanaStrict[1].toLowerCase();
+          const diaSemanaNumEsperado = mapaDiasStrict[diaSemanaSolicitado];
+          
+          if (diaSemanaNumEsperado) {
+              // Construir fecha candidata usando el mes/año detectado por Chrono
+              // (Si Chrono acertó el mes, usamos ese. Si no, asumimos que Chrono intenta lo coherente)
+              let candidata = fecha.set({ day: diaSolicitado });
+              
+              // Verificación de consistencia
+              if (candidata.weekday !== diaSemanaNumEsperado) {
+                  // Mismatch en el mes actual. ¿Quizás es el mes siguiente?
+                  // Solo si Chrono había devuelto una fecha lejana o si estamos muy cerca de fin de mes
+                  // Pero la regla estricta suele implicar el mes más cercano.
+                  // Vamos a probar si moviendo un mes coincide (por si Chrono se quedó corto)
+                  const candidataMesSiguiente = candidata.plus({ months: 1 });
+                  
+                  if (candidataMesSiguiente.weekday === diaSemanaNumEsperado) {
+                      // Coincide en el mes siguiente.
+                      // Pero si Chrono ya estaba en el futuro, quizás debemos respetarlo.
+                      // Si la diferencia es razonable, aceptamos mes siguiente.
+                      candidata = candidataMesSiguiente;
+                  } else {
+                       // Definitivamente no coincide ni este mes ni el que viene.
+                       // Error fatal de consistencia.
+                       throw new Error("dia y fecha no corresponde");
+                  }
+              }
+              
+              // Si llegamos aquí, es coherente (o lo hemos arreglado moviendo mes).
+              // Forzamos la fecha a ser la candidata (corrige casos donde Chrono ignoró el número)
+              fecha = candidata.set({
+                  hour: fecha.hour,
+                  minute: fecha.minute,
+                  second: 0,
+                  millisecond: 0
+              });
+          }
+      }
+  }
+
+  // --- CORRECCIÓN FINAL: Mismo día con intención futura ---
+  // Si después de todo, la fecha es HOY (o muy cercana) pero el usuario dijo explícitamente "que viene", "próximo", etc.
+  // y es el MISMO día de la semana, forzar +1 semana.
+  // Esto arregla el bug donde "miércoles que viene" devuelve "hoy miércoles" si el parser ignora el apellido "que viene".
+  const esMismoDiaSemana = fecha.weekday === refDate.weekday;
+  const diffDiasAbs = Math.abs(fecha.diff(refDate, 'days').days);
+  
+  // Detectar intención futura explícita
+  const tieneIntencionFutura = normalizada.match(/que\s+(viene|ve)|próximo|proximo|pròxim|vinent|propera|siguiente|següent/i);
+  
+  if (esMismoDiaSemana && diffDiasAbs < 6 && tieneIntencionFutura) {
+      // Si estamos en el mismo día de la semana, es "hoy" o muy cerca, y pidió futuro -> Sumar 7 días
+      fecha = fecha.plus({ weeks: 1 });
+  }
   
   return fecha;
 }
