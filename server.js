@@ -20,6 +20,33 @@ function preprocesarExpresion(expresion, fechaReferencia, limiteSemanas = 1) {
   const normalizada = expresion.toLowerCase().trim();
   const refDate = DateTime.fromJSDate(fechaReferencia);
   
+  // --- REGLAS DURAS DE NEGOCIO (Prioridad Alta) ---
+
+  // 1. REGLA "ESTA SEMANA" (Presente Inespecífico) -> HOY
+  // Si dice exactamente "esta semana" o "aquesta setmana" (sin nada más o con palabras de relleno simples)
+  // Devolvemos la fecha de referencia (HOY)
+  if (normalizada === 'esta semana' || normalizada === 'aquesta setmana' || 
+      normalizada === 'durante esta semana' || normalizada === 'durant aquesta setmana') {
+      return refDate.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+  }
+
+  // 2. REGLA "SEMANA QUE VIENE" INESPECÍFICA (Futuro Inespecífico) -> PRÓXIMO LUNES
+  // Detectar si menciona "semana que viene" pero NO menciona ningún día de la semana específico.
+  const mencionaSemanaQueViene = normalizada.match(/(?:semana|setmana)\s+(?:que\s+(?:viene|ve)|próxima|proxima|pròxima|vinent|propera|siguiente|següent)/i) ||
+                                 normalizada.match(/(?:próxima|proxima|pròxima|vinent|propera|siguiente|següent)\s+(?:semana|setmana)/i);
+  
+  const mencionaDiaSemana = normalizada.match(/\b(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo|dilluns|dimarts|dimecres|dijous|divendres|dissabte|diumenge)\b/i);
+
+  if (mencionaSemanaQueViene && !mencionaDiaSemana) {
+      // Calcular días hasta el próximo lunes (siempre el inicio de la semana siguiente)
+      const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
+      // Días hasta el domingo actual (fin de esta semana) + 1 (inicio de la siguiente)
+      const diasHastaProximoLunes = (7 - hoyDiaSemana) + 1;
+      return refDate.plus({ days: diasHastaProximoLunes }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }); // Lunes a las 9:00 AM
+  }
+
+  // --- FIN REGLAS DURAS ---
+  
   // Calcular límite de días dinámico: días hasta domingo + (semanas * 7)
   const hoyDiaSemana = refDate.weekday; // 1=lunes, 7=domingo
   const diasHastaDomingo = 7 - hoyDiaSemana;
